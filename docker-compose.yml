@@ -67,6 +67,46 @@ services:
                                                                                                                                                                                    
                                                                                                                                                                                      
     # ═══════════════════════════════════════════════
+    # ZOOKEEPER — Gestionnaire du cluster Kafka
+    # ═══════════════════════════════════════════════
+    # Rôle : coordonne les brokers Kafka
+    #        indispensable pour que Kafka fonctionne
+    zookeeper:
+      image: confluentinc/cp-zookeeper:7.5.0
+      container_name: zookeeper
+      hostname: zookeeper
+      ports:
+        - "2181:2181"
+      environment:
+        ZOOKEEPER_CLIENT_PORT: 2181
+        ZOOKEEPER_TICK_TIME: 2000
+
+
+    # ═══════════════════════════════════════════════
+    # KAFKA — Le bus de messages
+    # ═══════════════════════════════════════════════
+    # Rôle : reçoit les messages des producers
+    #        et les distribue aux consumers (Spark, HDFS)
+    kafka:
+      image: confluentinc/cp-kafka:7.5.0
+      container_name: kafka
+      hostname: kafka
+      ports:
+        - "9092:9092"    # Port pour les clients externes
+        - "29092:29092"  # Port interne Docker
+      environment:
+        KAFKA_BROKER_ID: 1
+        KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+        KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+        KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+        KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+        KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      depends_on:
+        - zookeeper
+
+
+    # ═══════════════════════════════════════════════
     # SPARK MASTER — Le chef d'orchestre Spark                                                                                                                                       
     # ═══════════════════════════════════════════════                                                                                                                              
     # Rôle : reçoit les jobs Spark, les découpe en tâches
@@ -85,25 +125,49 @@ services:
         SPARK_NO_DAEMONIZE: "false"
         HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
       volumes:
-        - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro                                                                                                                 
-                                                                                                                                                                                     
-  
-    # ═══════════════════════════════════════════════                                                                                                                                
-    # SPARK WORKER — Le muscle qui calcule                                                                                                                                         
+        - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+        - ./jars:/opt/spark-kafka-jars:ro
+
+    # ═══════════════════════════════════════════════
+    # SPARK WORKER 1 — Muscle de calcul (batch)
     # ═══════════════════════════════════════════════
     # Rôle : exécute les tâches Spark (map, filter, join, etc.)
-    #        c'est lui qui consomme la RAM et le CPU                                                                                                                                 
-    spark-worker:
+    #        3 cores + 2GB RAM dédies aux jobs batch
+    spark-worker-1:
       image: jupyter/pyspark-notebook:spark-3.5.0
-      container_name: spark-worker
+      container_name: spark-worker-1
       user: root
-      command: bash -c "/usr/local/spark/sbin/start-worker.sh spark://spark-master:7077 --memory 4g --cores 2 && tail -f /usr/local/spark/logs/*"
+      command: bash -c "/usr/local/spark/sbin/start-worker.sh spark://spark-master:7077 --memory 2g --cores 3 && tail -f /usr/local/spark/logs/*"
       environment:
         SPARK_HOME: /usr/local/spark
         SPARK_NO_DAEMONIZE: "false"
         HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
       volumes:
         - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+        - ./data:/home/jovyan/data
+        - ./jars:/opt/spark-kafka-jars:ro
+      depends_on:
+        - spark-master
+
+    # ═══════════════════════════════════════════════
+    # SPARK WORKER 2 — Muscle de calcul (streaming)
+    # ═══════════════════════════════════════════════
+    # Rôle : deuxième noeud de calcul, permet d'exécuter
+    #        deux jobs Spark en parallèle (ex: batch + streaming)
+    #        C'est le principe du scaling horizontal
+    spark-worker-2:
+      image: jupyter/pyspark-notebook:spark-3.5.0
+      container_name: spark-worker-2
+      user: root
+      command: bash -c "/usr/local/spark/sbin/start-worker.sh spark://spark-master:7077 --memory 2g --cores 3 && tail -f /usr/local/spark/logs/*"
+      environment:
+        SPARK_HOME: /usr/local/spark
+        SPARK_NO_DAEMONIZE: "false"
+        HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      volumes:
+        - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+        - ./data:/home/jovyan/data
+        - ./jars:/opt/spark-kafka-jars:ro
       depends_on:
         - spark-master                                                                                                                                                               
                                                                                                                                                                                    
@@ -127,6 +191,8 @@ services:
         - ./data:/home/jovyan/data
         # Config Hadoop pour accéder à HDFS
         - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+        # JARs Kafka pour Spark
+        - ./jars:/opt/spark-kafka-jars:ro
 
       environment:
         # Connecte Jupyter au Spark Master
@@ -142,3 +208,4 @@ services:
 volumes:
   namenode_data:     # Métadonnées du namenode
   datanode_data:     # Données réelles du datanode
+  kafka_data:        # Données Kafka
