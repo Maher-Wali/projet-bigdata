@@ -1,0 +1,23 @@
+# Data files (too large for git)
+*.csv
+*.parquet
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment / secrets
+.env
+
+# Spark / Hadoop logs
+*.log
+logs/
+spark-warehouse/
+metastore_db/
+derby.log

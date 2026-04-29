@@ -1,0 +1,144 @@
+services:                                                                                                                                                                          
+                                                                                                                                                                                   
+    # ═══════════════════════════════════════════════                                                                                                                                
+    # NAMENODE — Le maître de HDFS
+    # ═══════════════════════════════════════════════                                                                                                                                
+    # Rôle : il ne stocke AUCUNE donnée lui-même                                                                                                                                     
+    #        il garde un "annuaire" : quel bloc de fichier                                                                                                                           
+    #        est sur quel datanode                                                                                                                                                   
+    namenode:                                                                                                                                                                        
+      # Image pré-construite avec Hadoop installé et configuré                                                                                                                       
+      image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8                                                                                                                         
+                                                                                                                                                                                   
+      # Nom du container (pour le retrouver avec docker exec)                                                                                                                        
+      container_name: namenode                                                                                                                                                     
+                                                                                                                                                                                     
+      # Nom réseau interne (les autres containers utilisent ce nom)                                                                                                                  
+      hostname: namenode
+                                                                                                                                                                                     
+      # Ports exposés vers ta machine                                                                                                                                                
+      ports:
+        - "9870:9870"    # Interface web HDFS → http://localhost:9870                                                                                                                
+                          # Tu verras : espace disque, fichiers, datanodes                                                                                                         
+        - "9000:9000"    # Port RPC — c'est l'adresse "hdfs://namenode:9000"                                                                                                         
+                          # que Spark utilise pour lire/écrire dans HDFS                                                                                                             
+                                                                                                                                                                                     
+      environment:                                                                                                                                                                   
+        CLUSTER_NAME: "taxi-cluster"   # Nom arbitraire du cluster                                                                                                                   
+                                                                                                                                                                                     
+      # Charge les variables d'env depuis hadoop.env
+      env_file:                                                                                                                                                                      
+        - ./hadoop.env                                                                                                                                                             
+                                                                                                                                                                                     
+      # Volumes = dossiers partagés entre ta machine et le container
+      volumes:                                                                                                                                                                       
+        # Persist les métadonnées HDFS (survit au redémarrage)                                                                                                                     
+        - namenode_data:/hadoop/dfs/name                                                                                                                                             
+        # Monte ton dossier data/ dans le container
+        # Permet de faire : hdfs dfs -put /data/fact_trips.csv /projet/                                                                                                              
+        - ./data:/data                                                                                                                                                               
+                                                                                                                                                                                     
+                                                                                                                                                                                     
+    # ═══════════════════════════════════════════════                                                                                                                              
+    # DATANODE — Le stockage de HDFS
+    # ═══════════════════════════════════════════════                                                                                                                                
+    # Rôle : stocke les blocs de données réels
+    #        en production il y en a des dizaines/centaines                                                                                                                          
+    #        ici un seul suffit                                                                                                                                                      
+    datanode:                                                                                                                                                                        
+      image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8                                                                                                                         
+      container_name: datanode                                                                                                                                                       
+      hostname: datanode
+                                                                                                                                                                                     
+      environment:                                                                                                                                                                 
+        # Attend que le namenode soit prêt avant de démarrer
+        SERVICE_PRECONDITION: "namenode:9870"                                                                                                                                        
+  
+      env_file:                                                                                                                                                                      
+        - ./hadoop.env                                                                                                                                                             
+                                                                                                                                                                                     
+      volumes:
+        # Persist les données HDFS (les vrais fichiers)                                                                                                                              
+        - datanode_data:/hadoop/dfs/data                                                                                                                                           
+
+      # Démarre après le namenode                                                                                                                                                    
+      depends_on:
+        - namenode                                                                                                                                                                   
+                                                                                                                                                                                   
+                                                                                                                                                                                     
+    # ═══════════════════════════════════════════════
+    # SPARK MASTER — Le chef d'orchestre Spark                                                                                                                                       
+    # ═══════════════════════════════════════════════                                                                                                                              
+    # Rôle : reçoit les jobs Spark, les découpe en tâches
+    #        et les distribue aux workers                                                                                                                                            
+    spark-master:
+      image: jupyter/pyspark-notebook:spark-3.5.0
+      container_name: spark-master
+      hostname: spark-master
+      user: root
+      ports:
+        - "8080:8080"
+        - "7077:7077"
+      command: bash -c "/usr/local/spark/sbin/start-master.sh --host spark-master --port 7077 --webui-port 8080 && tail -f /usr/local/spark/logs/*"
+      environment:
+        SPARK_HOME: /usr/local/spark
+        SPARK_NO_DAEMONIZE: "false"
+        HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      volumes:
+        - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro                                                                                                                 
+                                                                                                                                                                                     
+  
+    # ═══════════════════════════════════════════════                                                                                                                                
+    # SPARK WORKER — Le muscle qui calcule                                                                                                                                         
+    # ═══════════════════════════════════════════════
+    # Rôle : exécute les tâches Spark (map, filter, join, etc.)
+    #        c'est lui qui consomme la RAM et le CPU                                                                                                                                 
+    spark-worker:
+      image: jupyter/pyspark-notebook:spark-3.5.0
+      container_name: spark-worker
+      user: root
+      command: bash -c "/usr/local/spark/sbin/start-worker.sh spark://spark-master:7077 --memory 4g --cores 2 && tail -f /usr/local/spark/logs/*"
+      environment:
+        SPARK_HOME: /usr/local/spark
+        SPARK_NO_DAEMONIZE: "false"
+        HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      volumes:
+        - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      depends_on:
+        - spark-master                                                                                                                                                               
+                                                                                                                                                                                   
+
+    # ═══════════════════════════════════════════════
+    # JUPYTER — Ton interface de travail
+    # ═══════════════════════════════════════════════                                                                                                                                
+    # Rôle : notebook dans le navigateur
+    #        PySpark pré-installé, tu écris et exécutes ton code ici                                                                                                                 
+    jupyter:                                                                                                                                                                         
+      image: jupyter/pyspark-notebook:spark-3.5.0
+      container_name: jupyter                                                                                                                                                        
+                                                                                                                                                                                   
+      ports:                                                                                                                                                                         
+        - "8888:8888"    # Interface Jupyter → http://localhost:8888                                                                                                               
+
+      volumes:
+        # Tes notebooks sauvegardés sur ta machine
+        - ./notebooks:/home/jovyan/work
+        # Accès aux CSV depuis le notebook
+        - ./data:/home/jovyan/data
+        # Config Hadoop pour accéder à HDFS
+        - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+
+      environment:
+        # Connecte Jupyter au Spark Master
+        SPARK_MASTER: spark://spark-master:7077
+        HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop                                                                                                                                      
+  
+                                                                                                                                                                                     
+  # ═══════════════════════════════════════════════                                                                                                                                
+  # VOLUMES PERSISTANTS
+  # ═══════════════════════════════════════════════                                                                                                                                  
+  # Docker crée ces espaces de stockage
+  # Les données HDFS survivent même si tu fais docker-compose down                                                                                                                   
+volumes:
+  namenode_data:     # Métadonnées du namenode
+  datanode_data:     # Données réelles du datanode
