@@ -1,76 +1,37 @@
-services:                                                                                                                                                                          
-                                                                                                                                                                                   
-    # ═══════════════════════════════════════════════                                                                                                                                
-    # NAMENODE — Le maître de HDFS
-    # ═══════════════════════════════════════════════                                                                                                                                
-    # Rôle : il ne stocke AUCUNE donnée lui-même                                                                                                                                     
-    #        il garde un "annuaire" : quel bloc de fichier                                                                                                                           
-    #        est sur quel datanode                                                                                                                                                   
-    namenode:                                                                                                                                                                        
-      # Image pré-construite avec Hadoop installé et configuré                                                                                                                       
-      image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8                                                                                                                         
-                                                                                                                                                                                   
-      # Nom du container (pour le retrouver avec docker exec)                                                                                                                        
-      container_name: namenode                                                                                                                                                     
-                                                                                                                                                                                     
-      # Nom réseau interne (les autres containers utilisent ce nom)                                                                                                                  
-      hostname: namenode
-                                                                                                                                                                                     
-      # Ports exposés vers ta machine                                                                                                                                                
-      ports:
-        - "9870:9870"    # Interface web HDFS → http://localhost:9870                                                                                                                
-                          # Tu verras : espace disque, fichiers, datanodes                                                                                                         
-        - "9000:9000"    # Port RPC — c'est l'adresse "hdfs://namenode:9000"                                                                                                         
-                          # que Spark utilise pour lire/écrire dans HDFS                                                                                                             
-                                                                                                                                                                                     
-      environment:                                                                                                                                                                   
-        CLUSTER_NAME: "taxi-cluster"   # Nom arbitraire du cluster                                                                                                                   
-                                                                                                                                                                                     
-      # Charge les variables d'env depuis hadoop.env
-      env_file:                                                                                                                                                                      
-        - ./hadoop.env                                                                                                                                                             
-                                                                                                                                                                                     
-      # Volumes = dossiers partagés entre ta machine et le container
-      volumes:                                                                                                                                                                       
-        # Persist les métadonnées HDFS (survit au redémarrage)                                                                                                                     
-        - namenode_data:/hadoop/dfs/name                                                                                                                                             
-        # Monte ton dossier data/ dans le container
-        # Permet de faire : hdfs dfs -put /data/fact_trips.csv /projet/                                                                                                              
-        - ./data:/data                                                                                                                                                               
-                                                                                                                                                                                     
-                                                                                                                                                                                     
-    # ═══════════════════════════════════════════════                                                                                                                              
-    # DATANODE — Le stockage de HDFS
-    # ═══════════════════════════════════════════════                                                                                                                                
-    # Rôle : stocke les blocs de données réels
-    #        en production il y en a des dizaines/centaines                                                                                                                          
-    #        ici un seul suffit                                                                                                                                                      
-    datanode:                                                                                                                                                                        
-      image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8                                                                                                                         
-      container_name: datanode                                                                                                                                                       
-      hostname: datanode
-                                                                                                                                                                                     
-      environment:                                                                                                                                                                 
-        # Attend que le namenode soit prêt avant de démarrer
-        SERVICE_PRECONDITION: "namenode:9870"                                                                                                                                        
-  
-      env_file:                                                                                                                                                                      
-        - ./hadoop.env                                                                                                                                                             
-                                                                                                                                                                                     
-      volumes:
-        # Persist les données HDFS (les vrais fichiers)                                                                                                                              
-        - datanode_data:/hadoop/dfs/data                                                                                                                                           
+services:
 
-      # Démarre après le namenode                                                                                                                                                    
+    namenode:
+      image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+      container_name: namenode
+      hostname: namenode
+      ports:
+        - "9870:9870"
+        - "9000:9000"
+      environment:
+        CLUSTER_NAME: "taxi-cluster"
+      env_file:
+        - ./hadoop.env
+      volumes:
+        - namenode_data:/hadoop/dfs/name
+        - ./data:/data
+      networks:
+        - bigdata-net
+
+    datanode:
+      image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+      container_name: datanode
+      hostname: datanode
+      environment:
+        SERVICE_PRECONDITION: "namenode:9870"
+      env_file:
+        - ./hadoop.env
+      volumes:
+        - datanode_data:/hadoop/dfs/data
       depends_on:
-        - namenode                                                                                                                                                                   
-                                                                                                                                                                                   
-                                                                                                                                                                                     
-    # ═══════════════════════════════════════════════
-    # ZOOKEEPER — Gestionnaire du cluster Kafka
-    # ═══════════════════════════════════════════════
-    # Rôle : coordonne les brokers Kafka
-    #        indispensable pour que Kafka fonctionne
+        - namenode
+      networks:
+        - bigdata-net
+
     zookeeper:
       image: confluentinc/cp-zookeeper:7.5.0
       container_name: zookeeper
@@ -80,20 +41,16 @@ services:
       environment:
         ZOOKEEPER_CLIENT_PORT: 2181
         ZOOKEEPER_TICK_TIME: 2000
+      networks:
+        - bigdata-net
 
-
-    # ═══════════════════════════════════════════════
-    # KAFKA — Le bus de messages
-    # ═══════════════════════════════════════════════
-    # Rôle : reçoit les messages des producers
-    #        et les distribue aux consumers (Spark, HDFS)
     kafka:
       image: confluentinc/cp-kafka:7.5.0
       container_name: kafka
       hostname: kafka
       ports:
-        - "9092:9092"    # Port pour les clients externes
-        - "29092:29092"  # Port interne Docker
+        - "9092:9092"
+        - "29092:29092"
       environment:
         KAFKA_BROKER_ID: 1
         KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -104,13 +61,9 @@ services:
         KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       depends_on:
         - zookeeper
+      networks:
+        - bigdata-net
 
-
-    # ═══════════════════════════════════════════════
-    # SPARK MASTER — Le chef d'orchestre Spark                                                                                                                                       
-    # ═══════════════════════════════════════════════                                                                                                                              
-    # Rôle : reçoit les jobs Spark, les découpe en tâches
-    #        et les distribue aux workers                                                                                                                                            
     spark-master:
       image: jupyter/pyspark-notebook:spark-3.5.0
       container_name: spark-master
@@ -127,12 +80,9 @@ services:
       volumes:
         - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
         - ./jars:/opt/spark-kafka-jars:ro
+      networks:
+        - bigdata-net
 
-    # ═══════════════════════════════════════════════
-    # SPARK WORKER 1 — Muscle de calcul (batch)
-    # ═══════════════════════════════════════════════
-    # Rôle : exécute les tâches Spark (map, filter, join, etc.)
-    #        3 cores + 2GB RAM dédies aux jobs batch
     spark-worker-1:
       image: jupyter/pyspark-notebook:spark-3.5.0
       container_name: spark-worker-1
@@ -148,13 +98,9 @@ services:
         - ./jars:/opt/spark-kafka-jars:ro
       depends_on:
         - spark-master
+      networks:
+        - bigdata-net
 
-    # ═══════════════════════════════════════════════
-    # SPARK WORKER 2 — Muscle de calcul (streaming)
-    # ═══════════════════════════════════════════════
-    # Rôle : deuxième noeud de calcul, permet d'exécuter
-    #        deux jobs Spark en parallèle (ex: batch + streaming)
-    #        C'est le principe du scaling horizontal
     spark-worker-2:
       image: jupyter/pyspark-notebook:spark-3.5.0
       container_name: spark-worker-2
@@ -169,51 +115,33 @@ services:
         - ./data:/home/jovyan/data
         - ./jars:/opt/spark-kafka-jars:ro
       depends_on:
-        - spark-master                                                                                                                                                               
-                                                                                                                                                                                   
+        - spark-master
+      networks:
+        - bigdata-net
 
-    # ═══════════════════════════════════════════════
-    # JUPYTER — Ton interface de travail
-    # ═══════════════════════════════════════════════
-    # Rôle : notebook dans le navigateur
-    #        PySpark pré-installé, tu écris et exécutes ton code ici
     jupyter:
       image: jupyter/pyspark-notebook:spark-3.5.0
       container_name: jupyter
-
       ports:
-        - "8888:8888"    # Interface Jupyter → http://localhost:8888
-
+        - "8888:8888"
       volumes:
-        # Tes notebooks sauvegardés sur ta machine
         - ./notebooks:/home/jovyan/work
-        # Accès aux CSV depuis le notebook
         - ./data:/home/jovyan/data
-        # Config Hadoop pour accéder à HDFS
         - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
-        # JARs Kafka pour Spark
         - ./jars:/opt/spark-kafka-jars:ro
-
       environment:
-        # Connecte Jupyter au Spark Master
         SPARK_MASTER: spark://spark-master:7077
         HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      networks:
+        - bigdata-net
 
-
-    # ═══════════════════════════════════════════════
-    # CLICKHOUSE — Base OLAP colonnaire
-    # ═══════════════════════════════════════════════
-    # Rôle : stocke les résultats batch ET streaming
-    #        optimisée pour les requêtes analytiques
-    #        (GROUP BY, AVG, SUM) jusqu'à 100x plus
-    #        rapide qu'une base relationnelle classique
     clickhouse:
       image: clickhouse/clickhouse-server:23.8
       container_name: clickhouse
       hostname: clickhouse
       ports:
-        - "8123:8123"    # Interface HTTP → http://localhost:8123
-        - "9001:9000"    # Protocole natif (9001 pour éviter conflit avec HDFS 9000)
+        - "8123:8123"
+        - "9001:9000"
       volumes:
         - clickhouse_data:/var/lib/clickhouse
         - ./init_clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -221,21 +149,35 @@ services:
         nofile:
           soft: 262144
           hard: 262144
+      networks:
+        - bigdata-net
 
+    grafana:
+      image: grafana/grafana:10.4.0
+      container_name: grafana
+      hostname: grafana
+      ports:
+        - "3000:3000"
+      environment:
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+        GF_SECURITY_ALLOW_EMBEDDING: "true"
+        GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      volumes:
+        - grafana_data:/var/lib/grafana
+        - ./grafana/provisioning:/etc/grafana/provisioning
+        - ./grafana/dashboards:/var/lib/grafana/dashboards
+      depends_on:
+        - clickhouse
+      networks:
+        - bigdata-net
 
-    # ═══════════════════════════════════════════════
-    # DASHBOARD — Streamlit (temps réel)
-    # ═══════════════════════════════════════════════
-    # Rôle : interface web qui affiche côte à côte
-    #        les résultats batch (historique jan-nov)
-    #        et streaming (décembre en live)
-    #        Auto-refresh toutes les 3 secondes
     dashboard:
       image: python:3.11-slim
       container_name: dashboard
       hostname: dashboard
       ports:
-        - "8501:8501"    # Interface Streamlit → http://localhost:8501
+        - "8501:8501"
       volumes:
         - ./dashboard:/app
       working_dir: /app
@@ -243,16 +185,17 @@ services:
         bash -c "pip install streamlit plotly clickhouse-connect pandas &&
                  streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true"
       depends_on:
-        - clickhouse                                                                                                                                      
-  
-                                                                                                                                                                                     
-  # ═══════════════════════════════════════════════                                                                                                                                
-  # VOLUMES PERSISTANTS
-  # ═══════════════════════════════════════════════                                                                                                                                  
-  # Docker crée ces espaces de stockage
-  # Les données HDFS survivent même si tu fais docker-compose down                                                                                                                   
+        - clickhouse
+      networks:
+        - bigdata-net
+
 volumes:
-  namenode_data:     # Métadonnées du namenode
-  datanode_data:     # Données réelles du datanode
-  kafka_data:        # Données Kafka
-  clickhouse_data:   # Données ClickHouse (batch + streaming)
+  namenode_data:
+  datanode_data:
+  kafka_data:
+  clickhouse_data:
+  grafana_data:
+
+networks:
+  bigdata-net:
+    driver: bridge

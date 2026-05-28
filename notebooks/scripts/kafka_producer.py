@@ -16,7 +16,7 @@ import json, time, csv, datetime
 
 KAFKA_BROKER = 'kafka:29092'
 TOPIC = 'nyc-taxi-trips'
-CSV_PATH = '/home/jovyan/data/fact_trips_sample.csv'
+CSV_PATH = '/home/jovyan/data/nyc-taxi/fact_trips_final.csv'
 BATCH_SIZE = 100       # Envoyer par rafales de 100 messages
 LOG_EVERY = 500        # Log toutes les 500 messages
 DELAY = 0.5            # 500ms de pause entre chaque rafale → ~200 msg/s

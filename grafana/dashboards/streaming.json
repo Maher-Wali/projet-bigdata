@@ -1,0 +1,150 @@
+{
+  "title": "NYC Taxi - Streaming Live",
+  "uid": "nyc-streaming",
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Trajets Live par Borough",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT borough, nb_trips FROM stream_borough_stats FINAL ORDER BY nb_trips DESC",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "xField": "borough", "orientation": "auto", "colorByField": "borough" }
+    },
+    {
+      "id": 2,
+      "title": "Revenus Live par Borough ($)",
+      "type": "barchart",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT borough, total_revenue FROM stream_borough_stats FINAL ORDER BY total_revenue DESC",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "xField": "borough", "orientation": "auto", "colorByField": "borough" }
+    },
+    {
+      "id": 3,
+      "title": "Trajets Totaux Live",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT sum(nb_trips) as total FROM stream_borough_stats FINAL",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } }
+    },
+    {
+      "id": 4,
+      "title": "Revenu Total Live ($)",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT round(sum(total_revenue), 2) as revenu FROM stream_borough_stats FINAL",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } }
+    },
+    {
+      "id": 5,
+      "title": "Distance Moyenne Live (mi)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT round(avg(avg_distance), 2) as distance FROM stream_borough_stats FINAL",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } } }
+    },
+    {
+      "id": 6,
+      "title": "Nb Alertes Actives",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT count() as alertes FROM stream_alerts",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } }
+    },
+    {
+      "id": 7,
+      "title": "Top 10 Zones Live",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 9 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT zone, nb_trips FROM stream_top_zones FINAL ORDER BY nb_trips DESC LIMIT 10",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "xField": "zone", "orientation": "horizontal" }
+    },
+    {
+      "id": 8,
+      "title": "Alertes Recentes",
+      "type": "table",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 9 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT alert_time, borough, alert_type, deviation_pct, message FROM stream_alerts ORDER BY alert_time DESC LIMIT 20",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ],
+      "options": { "sortBy": [{ "displayName": "alert_time", "desc": true }] }
+    }
+  ]
+}

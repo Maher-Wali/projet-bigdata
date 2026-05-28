@@ -67,40 +67,17 @@ with tab1:
     # ── COLONNE GAUCHE : STREAMING TEMPS REEL ──
     with col_stream:
         st.subheader("Streaming (temps reel)")
-        st.caption("Donnees de Decembre - mises a jour en continu")
-
-        df_s = query_df("SELECT * FROM stream_borough_stats FINAL ORDER BY nb_trips DESC")
-        if not df_s.empty:
-            # Metriques live
-            cols = st.columns(3)
-            cols[0].metric("Trajets live", f"{df_s['nb_trips'].sum():,.0f}")
-            cols[1].metric("Revenu live", f"${df_s['total_revenue'].sum():,.0f}")
-            cols[2].metric("Distance moy.", f"{df_s['avg_distance'].mean():.1f} mi")
-
-            # Graphique borough
-            fig = px.bar(df_s, x='borough', y='nb_trips',
-                        color='borough', title="Trajets par Borough (Live)",
-                        color_discrete_sequence=px.colors.qualitative.Set1)
-            fig.update_layout(showlegend=False, height=350)
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Graphique revenus
-            fig2 = px.bar(df_s, x='borough', y='total_revenue',
-                         color='borough', title="Revenus par Borough (Live $)",
-                         color_discrete_sequence=px.colors.qualitative.Set1)
-            fig2.update_layout(showlegend=False, height=300)
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("En attente du streaming... Les donnees apparaitront automatiquement.")
-
-        # Top zones streaming
-        df_tz = query_df("SELECT * FROM stream_top_zones FINAL ORDER BY nb_trips DESC LIMIT 10")
-        if not df_tz.empty:
-            fig_tz = px.bar(df_tz, x='nb_trips', y='zone', orientation='h',
-                           color='borough', title="Top 10 Zones (Live)",
-                           color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_tz.update_layout(height=350, yaxis=dict(autorange='reversed'))
-            st.plotly_chart(fig_tz, use_container_width=True)
+        st.caption("Donnees de Decembre - visualisation en temps reel dans Grafana")
+        st.info(
+            "Les donnees streaming sont visualisees dans Grafana pour des "
+            "mises a jour optimales toutes les 5 secondes."
+        )
+        st.link_button(
+            "Ouvrir le Dashboard Streaming (Grafana)",
+            "http://localhost:3000/d/nyc-streaming",
+            use_container_width=True,
+            type="primary"
+        )
 
     # ── COLONNE DROITE : BATCH REPROCESSING ──
     with col_batch:
@@ -140,31 +117,6 @@ with tab1:
             fig.update_layout(height=350, xaxis_title="Jour", yaxis_title="Nb Trajets")
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── Comparaison Streaming vs Batch (en bas) ──
-    if not df_s.empty and not df_r.empty:
-        st.markdown("---")
-        st.subheader("Comparaison : Streaming vs Batch")
-        st.caption("Le streaming est approximatif (incremental), le batch est exact (recalcul total)")
-
-        merged = df_s[['borough', 'nb_trips']].merge(
-            df_r[['borough', 'nb_trips']],
-            on='borough', suffixes=('_stream', '_batch'), how='outer'
-        ).fillna(0)
-
-        fig_comp = go.Figure()
-        fig_comp.add_trace(go.Bar(
-            x=merged['borough'], y=merged['nb_trips_stream'],
-            name='Streaming (live)', marker_color='#E45756'
-        ))
-        fig_comp.add_trace(go.Bar(
-            x=merged['borough'], y=merged['nb_trips_batch'],
-            name='Batch (exact)', marker_color='#72B7B2'
-        ))
-        fig_comp.update_layout(
-            title="Trajets : Streaming vs Batch par Borough",
-            barmode='group', height=350
-        )
-        st.plotly_chart(fig_comp, use_container_width=True)
 
 
 # ───────────────────────────────────────
@@ -311,26 +263,15 @@ with tab3:
 with tab4:
     st.subheader("Alertes Temps Reel")
     st.caption("Deviations significatives entre streaming et historique batch (seuil > 30%)")
-
-    df_alerts = query_df("SELECT * FROM stream_alerts ORDER BY alert_time DESC LIMIT 50")
-    if not df_alerts.empty:
-        cols = st.columns(3)
-        cols[0].metric("Total alertes", len(df_alerts))
-        cols[1].metric("Boroughs concernes",
-                      df_alerts['borough'].nunique() if 'borough' in df_alerts.columns else 0)
-        cols[2].metric("Deviation max",
-                      f"{df_alerts['deviation_pct'].max():.1f}%" if 'deviation_pct' in df_alerts.columns else "N/A")
-
-        fig = px.scatter(df_alerts, x='alert_time', y='deviation_pct',
-                        color='borough', size='deviation_pct',
-                        title="Timeline des Alertes",
-                        hover_data=['message'])
-        fig.update_layout(height=350)
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.dataframe(df_alerts, hide_index=True, use_container_width=True)
-    else:
-        st.info("Aucune alerte. Les alertes apparaitront quand le streaming detectera des deviations > 30% par rapport au batch historique.")
+    st.info(
+        "Les alertes live sont visualisees dans Grafana avec rafraichissement automatique toutes les 5 secondes."
+    )
+    st.link_button(
+        "Ouvrir les Alertes Live (Grafana)",
+        "http://localhost:3000/d/nyc-streaming",
+        use_container_width=True,
+        type="primary"
+    )
 
 
 # ───────────────────────────────────────
@@ -429,6 +370,6 @@ with st.sidebar:
     - ClickHouse : `localhost:8123`
     """)
 
-# ── Auto-refresh (2 secondes) ──
-time.sleep(2)
+# ── Auto-refresh (batch reprocessing status only) ──
+time.sleep(10)
 st.rerun()
