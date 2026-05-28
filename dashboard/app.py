@@ -7,10 +7,19 @@ Auto-refresh toutes les 3 secondes pour les donnees streaming
 import time
 import datetime
 import streamlit as st
+import streamlit.components.v1 as components
 import clickhouse_connect
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+
+_GRAFANA = "http://localhost:3000"
+_DASH    = "nyc-streaming"
+_PARAMS  = "orgId=1&refresh=2s&from=now-15m&to=now&theme=light"
+
+def grafana_panel(panel_id: int, height: int = 350):
+    url = f"{_GRAFANA}/d-solo/{_DASH}?{_PARAMS}&panelId={panel_id}"
+    components.iframe(url, height=height, scrolling=False)
 
 # ── Config page ──
 st.set_page_config(
@@ -67,17 +76,21 @@ with tab1:
     # ── COLONNE GAUCHE : STREAMING TEMPS REEL ──
     with col_stream:
         st.subheader("Streaming (temps reel)")
-        st.caption("Donnees de Decembre - visualisation en temps reel dans Grafana")
-        st.info(
-            "Les donnees streaming sont visualisees dans Grafana pour des "
-            "mises a jour optimales toutes les 5 secondes."
-        )
-        st.link_button(
-            "Ouvrir le Dashboard Streaming (Grafana)",
-            "http://localhost:3000/d/nyc-streaming",
-            use_container_width=True,
-            type="primary"
-        )
+        st.caption("Decembre — rafraichissement automatique toutes les 5 secondes")
+
+        # KPI row: total trips / revenue / avg distance
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            grafana_panel(3, height=120)
+        with k2:
+            grafana_panel(4, height=120)
+        with k3:
+            grafana_panel(5, height=120)
+
+        # Bar charts
+        grafana_panel(1, height=300)   # Trajets par borough
+        grafana_panel(2, height=300)   # Revenus par borough
+        grafana_panel(7, height=320)   # Top 10 zones
 
     # ── COLONNE DROITE : BATCH REPROCESSING ──
     with col_batch:
@@ -262,16 +275,13 @@ with tab3:
 # ───────────────────────────────────────
 with tab4:
     st.subheader("Alertes Temps Reel")
-    st.caption("Deviations significatives entre streaming et historique batch (seuil > 30%)")
-    st.info(
-        "Les alertes live sont visualisees dans Grafana avec rafraichissement automatique toutes les 5 secondes."
-    )
-    st.link_button(
-        "Ouvrir les Alertes Live (Grafana)",
-        "http://localhost:3000/d/nyc-streaming",
-        use_container_width=True,
-        type="primary"
-    )
+    st.caption("Deviations significatives entre streaming et historique batch (seuil > 30%) — rafraichissement 5s")
+
+    col_stat, _ = st.columns([1, 3])
+    with col_stat:
+        grafana_panel(6, height=120)   # Nb alertes actives
+
+    grafana_panel(8, height=450)       # Table alertes recentes
 
 
 # ───────────────────────────────────────
