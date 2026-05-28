@@ -174,15 +174,15 @@ services:
 
     # ═══════════════════════════════════════════════
     # JUPYTER — Ton interface de travail
-    # ═══════════════════════════════════════════════                                                                                                                                
+    # ═══════════════════════════════════════════════
     # Rôle : notebook dans le navigateur
-    #        PySpark pré-installé, tu écris et exécutes ton code ici                                                                                                                 
-    jupyter:                                                                                                                                                                         
+    #        PySpark pré-installé, tu écris et exécutes ton code ici
+    jupyter:
       image: jupyter/pyspark-notebook:spark-3.5.0
-      container_name: jupyter                                                                                                                                                        
-                                                                                                                                                                                   
-      ports:                                                                                                                                                                         
-        - "8888:8888"    # Interface Jupyter → http://localhost:8888                                                                                                               
+      container_name: jupyter
+
+      ports:
+        - "8888:8888"    # Interface Jupyter → http://localhost:8888
 
       volumes:
         # Tes notebooks sauvegardés sur ta machine
@@ -197,7 +197,53 @@ services:
       environment:
         # Connecte Jupyter au Spark Master
         SPARK_MASTER: spark://spark-master:7077
-        HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop                                                                                                                                      
+        HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+
+
+    # ═══════════════════════════════════════════════
+    # CLICKHOUSE — Base OLAP colonnaire
+    # ═══════════════════════════════════════════════
+    # Rôle : stocke les résultats batch ET streaming
+    #        optimisée pour les requêtes analytiques
+    #        (GROUP BY, AVG, SUM) jusqu'à 100x plus
+    #        rapide qu'une base relationnelle classique
+    clickhouse:
+      image: clickhouse/clickhouse-server:23.8
+      container_name: clickhouse
+      hostname: clickhouse
+      ports:
+        - "8123:8123"    # Interface HTTP → http://localhost:8123
+        - "9001:9000"    # Protocole natif (9001 pour éviter conflit avec HDFS 9000)
+      volumes:
+        - clickhouse_data:/var/lib/clickhouse
+        - ./init_clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      ulimits:
+        nofile:
+          soft: 262144
+          hard: 262144
+
+
+    # ═══════════════════════════════════════════════
+    # DASHBOARD — Streamlit (temps réel)
+    # ═══════════════════════════════════════════════
+    # Rôle : interface web qui affiche côte à côte
+    #        les résultats batch (historique jan-nov)
+    #        et streaming (décembre en live)
+    #        Auto-refresh toutes les 3 secondes
+    dashboard:
+      image: python:3.11-slim
+      container_name: dashboard
+      hostname: dashboard
+      ports:
+        - "8501:8501"    # Interface Streamlit → http://localhost:8501
+      volumes:
+        - ./dashboard:/app
+      working_dir: /app
+      command: >
+        bash -c "pip install streamlit plotly clickhouse-connect pandas &&
+                 streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true"
+      depends_on:
+        - clickhouse                                                                                                                                      
   
                                                                                                                                                                                      
   # ═══════════════════════════════════════════════                                                                                                                                
@@ -209,3 +255,4 @@ volumes:
   namenode_data:     # Métadonnées du namenode
   datanode_data:     # Données réelles du datanode
   kafka_data:        # Données Kafka
+  clickhouse_data:   # Données ClickHouse (batch + streaming)
