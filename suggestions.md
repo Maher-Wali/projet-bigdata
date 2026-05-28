@@ -62,3 +62,28 @@ The three pillars to add:
 A minimal first step would be structured logging from the Spark jobs and a Kafka lag
 exporter feeding into Grafana — this alone would make pipeline failures diagnosable
 rather than opaque.
+
+---
+
+## 4. Implement the final promotion step (Lambda cycle completion)
+
+Currently the pipeline has no way to close out a streaming period. December data lives
+permanently in `/projet/streaming/december_trips/` and `stream_*` / `reprocess_*` tables,
+never graduating into the batch layer alongside Jan-Nov.
+
+The missing step is a **promotion job** that runs once when a streaming period ends:
+
+1. Read `/projet/streaming/december_trips/` with Spark (same pipeline as notebooks 01-02)
+2. Run the full batch transformations (borough stats, monthly stats, top zones, ML models)
+3. Write output to `/projet/silver/` and `/projet/gold/` alongside the existing Jan-Nov data
+4. Upsert results into the `batch_*` ClickHouse tables
+5. Archive the raw streaming Parquet files to a cold path (e.g. `/projet/archive/2023-12/`)
+6. Drop or reset `stream_*`, `reprocess_*` tables and the HDFS streaming checkpoint
+7. Retire notebooks 04/05/06 until the next streaming period begins
+
+Without this step the batch layer permanently covers only Jan-Nov regardless of how much
+December data accumulates, and the `reprocess_*` results never become part of the
+authoritative historical record.
+
+A trigger for this job could be: a manual button in the dashboard, a date-based scheduler,
+or a Kafka topic reaching a known end-of-month offset.
