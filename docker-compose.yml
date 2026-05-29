@@ -140,7 +140,7 @@ services:
       container_name: clickhouse
       hostname: clickhouse
       ports:
-        - "8123:8123"
+        - "18123:8123"
         - "9001:9000"
       volumes:
         - clickhouse_data:/var/lib/clickhouse
@@ -178,7 +178,7 @@ services:
       container_name: dashboard
       hostname: dashboard
       ports:
-        - "8501:8501"
+        - "18501:8501"
       volumes:
         - ./dashboard:/app
       working_dir: /app

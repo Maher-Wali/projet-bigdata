@@ -130,7 +130,7 @@ def run_batch_reprocessing(trigger_source):
         duration = (end - start).total_seconds()
         log_entry = {
             'cycle_num': cycle_num,
-            'executed_at': end.strftime('%Y-%m-%d %H:%M:%S'),
+            'executed_at': end,
             'rows_processed': nb_rows,
             'duration_seconds': builtins.round(duration, 1),
             'boroughs_found': len(pdf_borough),
@@ -143,7 +143,25 @@ def run_batch_reprocessing(trigger_source):
         print(f'  {nb_rows} lignes traitees')
 
     except Exception as e:
+        import traceback
         print(f'Erreur batch: {e}')
+        traceback.print_exc()
+        # Write a failure entry so the dashboard shows something went wrong
+        try:
+            end = datetime.datetime.now()
+            duration = (end - start).total_seconds()
+            err_client = get_ch_client()
+            err_client.insert_df('reprocess_log', pd.DataFrame([{
+                'cycle_num': cycle_num,
+                'executed_at': end,
+                'rows_processed': -1,
+                'duration_seconds': builtins.round(duration, 1),
+                'boroughs_found': 0,
+                'zones_found': 0
+            }]))
+            err_client.close()
+        except Exception as log_err:
+            print(f'Impossible d\'ecrire le log d\'erreur: {log_err}')
     finally:
         spark.stop()
         print('SparkSession fermee (cores liberes)')
