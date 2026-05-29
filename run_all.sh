@@ -43,8 +43,8 @@ echo -e "${GREEN}  ✓ Tous les services sont prets${NC}"
 
 # Tuer les anciens kernels Jupyter et scripts (liberer les cores Spark)
 echo "  Nettoyage des anciens processus..."
-docker exec jupyter pkill -f "ipykernel_launcher" 2>/dev/null
-docker exec jupyter pkill -f "scripts/" 2>/dev/null
+docker exec jupyter pkill -f "ipykernel_launcher" 2>/dev/null || true
+docker exec jupyter pkill -f "scripts/" 2>/dev/null || true
 sleep 3
 
 # ── Etape 1 : Charger les CSV dans HDFS (Bronze) ──
