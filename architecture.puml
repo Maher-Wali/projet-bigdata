@@ -1,0 +1,134 @@
+@startuml
+
+skinparam backgroundColor white
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam componentStyle rectangle
+
+title NYC Taxi - Architecture Lambda Big Data\n1 million de trajets | 12 mois | Batch + Streaming\n
+
+' =============================================
+' SOURCES
+' =============================================
+package "Sources de Donnees" #E8F5E9 {
+    database "fact_trips\n1M lignes" as CSV
+    database "dim_localizacao\n263 zones" as DIM_LOC
+    database "dim_data\n366 jours" as DIM_DATE
+    database "dim_clima\n38 meteos" as DIM_WEATHER
+}
+
+' =============================================
+' HDFS - STOCKAGE DISTRIBUE
+' =============================================
+package "HDFS (Hadoop 3.2.1)" #E3F2FD {
+    node "NameNode :9870" as NN
+    node "DataNode" as DN
+
+    folder "Bronze\n/projet/bronze/\nCSV brut" as BRONZE #FFF9C4
+    folder "Silver\n/projet/silver/\nParquet nettoye" as SILVER #BDBDBD
+    folder "Gold\n/projet/gold/\nAgregations" as GOLD #FFD54F
+    folder "Streaming\n/projet/streaming/\ndecember_trips" as HDFS_STREAM #FFCCBC
+}
+
+' =============================================
+' BATCH LAYER
+' =============================================
+package "Batch Layer (Janvier - Novembre)" #FFF3E0 {
+    component "Notebook 01\nBronze to Silver\nnettoyage + filtrage\ndate_id <= 335" as NB01
+    component "Notebook 02\nSilver to Gold\n5 agregations" as NB02
+    component "Notebook 02b\nSparkML\nK-Means, Z-Score\nRegression" as NB02B
+}
+
+' =============================================
+' SPEED LAYER
+' =============================================
+package "Speed Layer (Decembre - Temps Reel)" #FCE4EC {
+    component "Kafka Producer\nfiltre date_id >= 336\n~89K messages" as NB03
+    component "Kafka Broker\nTopic: nyc-taxi-trips\n3 partitions :29092" as KAFKA
+    component "ZooKeeper\n:2181" as ZK
+    component "Spark Streaming\nstreaming_all.py\n2 streams (5s + 10s)" as STREAMING
+}
+
+' =============================================
+' SPARK CLUSTER
+' =============================================
+package "Cluster Spark 3.5.0" #F3E5F5 {
+    node "Spark Master\n:8080 :7077" as SM
+    node "Worker 1\n " as SW1
+    node "Worker 2\n " as SW2
+    node "Worker 3\n " as SW3
+}
+
+' =============================================
+' SERVING LAYER
+' =============================================
+package "Serving Layer" #E8EAF6 {
+    database "ClickHouse 23.8\nOLAP Colonnaire :8123\n19 tables" as CH
+    component "Batch Watcher\npoll 10s\nauto 4h + bouton" as WATCHER
+}
+
+' =============================================
+' PRESENTATION
+' =============================================
+package "Presentation" #E0F2F1 {
+    component "Streamlit\n:8501\n5 onglets" as DASH
+    component "Grafana\n:3000" as GRAFANA
+    component "Jupyter\n:8888" as JUPYTER
+}
+
+' =============================================
+' FLUX - Ingestion
+' =============================================
+CSV --> BRONZE
+DIM_LOC --> SILVER
+DIM_DATE --> SILVER
+DIM_WEATHER --> SILVER
+
+' FLUX - Batch
+BRONZE --> NB01
+NB01 --> SILVER : Parquet
+SILVER --> NB02
+NB02 --> GOLD : Parquet
+NB02 --> CH : batch_*
+SILVER --> NB02B
+NB02B --> CH : ML results
+
+' FLUX - Streaming
+CSV --> NB03 : Decembre
+NB03 --> KAFKA : JSON
+ZK --> KAFKA
+KAFKA --> STREAMING : readStream
+STREAMING --> CH : stream_*
+STREAMING --> HDFS_STREAM : Parquet
+
+' FLUX - Batch Reprocessing
+HDFS_STREAM --> WATCHER : relit HDFS
+WATCHER --> CH : reprocess_*
+CH --> WATCHER : poll trigger
+
+' FLUX - Spark
+SM --> SW1
+SM --> SW2
+SM --> SW3
+
+' FLUX - Serving
+CH --> DASH : SQL
+CH --> GRAFANA
+DASH --> CH : batch_trigger
+
+' =============================================
+' LEGENDE
+' =============================================
+legend right
+  |= Couleur |= Couche |
+  | <#E8F5E9> | Sources |
+  | <#E3F2FD> | HDFS (Medallion) |
+  | <#FFF3E0> | Batch Layer |
+  | <#FCE4EC> | Speed Layer |
+  | <#F3E5F5> | Cluster Spark |
+  | <#E8EAF6> | Serving Layer |
+  | <#E0F2F1> | Presentation |
+end legend
+
+@enduml
