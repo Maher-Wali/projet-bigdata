@@ -1,0 +1,168 @@
+@startuml architecture
+
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 11
+skinparam roundCorner 6
+skinparam shadowing false
+skinparam packageBorderColor #CCCCCC
+skinparam packageBackgroundColor #F9F9F9
+skinparam componentBackgroundColor #F5F5F5
+skinparam componentBorderColor #CCCCCC
+skinparam databaseBackgroundColor #E8F4F8
+skinparam databaseBorderColor #2B6E8A
+skinparam nodeBorderColor #999999
+skinparam arrowColor #555555
+
+title Architecture Lambda — NYC Taxi Pipeline
+
+' ============================================================
+' SOURCES
+' ============================================================
+package "Donnees sources (CSV)" as SRC {
+    file "fact_trips_sample.csv\n500K trajets, 12 mois" as CSV_TRIPS
+    file "dim_localizacao.csv\n263 zones NYC" as CSV_LOC
+    file "dim_data.csv\ndates 2023" as CSV_DATE
+    file "dim_clima.csv\nmeteo journaliere" as CSV_METEO
+}
+
+' ============================================================
+' HDFS
+' ============================================================
+package "HDFS — Stockage distribue" as HDFS {
+    folder "Bronze\n/projet/bronze/" as BRONZE
+    folder "Silver\n/projet/silver/\ntrips_clean + dimensions\n(Parquet)" as SILVER
+    folder "Streaming buffer\n/projet/streaming/\ndecember_trips/ + checkpoint" as STREAM_BUF
+}
+
+' ============================================================
+' SPARK
+' ============================================================
+package "Spark Cluster" as SPARK {
+    node "Master (:8080)" as MASTER
+    node "Worker 1 — Batch\n3 cores, 2 GB" as W1
+    node "Worker 2 — Streaming\n3 cores, 2 GB" as W2
+
+    component "NB 01\nBronze > Silver\nnettoyage, typage\nfiltrage mois 1-11" as NB01
+    component "NB 02\nSilver > Gold\n5 agregations :\nborough, monthly,\ntop zones, OD, weather" as NB02
+    component "NB 02b\nSparkML\nK-Means, Regression,\nAnomalies Z-Score" as NB02B
+}
+
+MASTER --> W1
+MASTER --> W2
+
+' ============================================================
+' KAFKA
+' ============================================================
+package "Kafka — Streaming" as KAFKA {
+    component "Producer\nkafka_producer.py\nlit CSV, filtre Dec\n~20 msg/s" as PRODUCER
+    queue "Topic\nnyc-taxi-trips" as TOPIC
+    component "Consumer\nstreaming_all.py" as CONSUMER
+}
+
+note right of CONSUMER
+  Stream 1 (5s) :
+  stats borough + zones
+  + alertes anomalies
+  => ClickHouse stream_*
+
+  Stream 2 (10s) :
+  archivage brut
+  => HDFS december_trips
+end note
+
+' ============================================================
+' CLICKHOUSE
+' ============================================================
+database "ClickHouse — OLAP (:8123)" as CH {
+    component "Tables Batch\nbatch_stats_borough\nbatch_stats_monthly\nbatch_top_zones\nbatch_od_matrix\nbatch_stats_weather\nbatch_day_patterns" as CH_BATCH
+
+    component "Tables ML\nbatch_clusters\nbatch_fare_predictions\nbatch_anomalies" as CH_ML
+
+    component "Tables Streaming\nstream_borough_stats\nstream_top_zones\nstream_alerts" as CH_STREAM
+
+    component "Tables Reprocessing\nreprocess_borough_stats\nreprocess_daily_stats\nreprocess_log" as CH_REPROCESS
+
+    component "batch_trigger\n(declenchement)" as CH_TRIGGER
+}
+
+' ============================================================
+' SERVING
+' ============================================================
+package "Serving Layer" as SERVING {
+    component "Dashboard Streamlit\n:8501 — 5 onglets\nauto-refresh 2s" as DASH
+    component "Batch Watcher\nbatch_watcher.py\npolling 10s + auto 4h" as WATCHER
+}
+
+package "Jupyter (:8888)" as JUPYTER {
+    component "Notebooks\n01 > 02 > 02b\n03 > 04 > 05 > 06" as NBS
+}
+
+' ============================================================
+' FLUX BATCH (traits pleins)
+' ============================================================
+CSV_TRIPS --> BRONZE
+CSV_LOC --> BRONZE
+CSV_DATE --> BRONZE
+CSV_METEO --> BRONZE
+
+BRONZE --> NB01 : lecture
+NB01 --> SILVER : Parquet
+
+SILVER --> NB02 : mois 1-11
+SILVER --> NB02B
+NB02 --> CH_BATCH
+NB02B --> CH_ML
+
+' ============================================================
+' FLUX STREAMING (traits pointilles)
+' ============================================================
+CSV_TRIPS ..> PRODUCER : filtre Dec
+PRODUCER ..> TOPIC : JSON
+TOPIC ..> CONSUMER
+
+CONSUMER ..> CH_STREAM : stats live
+CONSUMER ..> STREAM_BUF : archivage
+
+' ============================================================
+' FLUX BATCH REPROCESSING (traits gras)
+' ============================================================
+DASH --> CH_TRIGGER : bouton
+WATCHER --> CH_TRIGGER : polling
+
+WATCHER ==> STREAM_BUF : 1. Lire
+WATCHER ==> CH_REPROCESS : 2. Agreger
+WATCHER ==> CH_BATCH : 3. Fusionner
+WATCHER ==> SILVER : 4. Absorber\ndans Silver
+
+WATCHER ..> STREAM_BUF : 5. Supprimer\nbuffer + checkpoint
+WATCHER ..> TOPIC : 6. Purger topic
+WATCHER ..> CH_STREAM : 7. Vider tables
+WATCHER ..> CONSUMER : 8. Relancer\nstreaming
+
+' ============================================================
+' SERVING READS
+' ============================================================
+CH_BATCH --> DASH
+CH_ML --> DASH
+CH_STREAM --> DASH
+CH_REPROCESS --> DASH
+
+NBS --> MASTER
+
+' ============================================================
+' LEGENDE
+' ============================================================
+legend bottom left
+  |= Trait |= Flux |
+  | ---- | Batch (execution unique) |
+  | .... | Streaming (continu) |
+  | ==== | Batch reprocessing (a la demande) |
+  .
+  Le batch traite les mois 1 a 11.
+  Le streaming traite Decembre en temps reel.
+  Le reprocessing absorbe les donnees streaming
+  dans le batch, puis remet tout a zero.
+end legend
+
+@enduml

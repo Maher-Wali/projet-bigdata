@@ -25,6 +25,10 @@ import pandas as pd
 AUTO_INTERVAL_HOURS = 4
 POLL_INTERVAL_SECONDS = 10
 HDFS_STREAMING_PATH = 'hdfs://namenode:9000/projet/streaming/december_trips'
+HDFS_CHECKPOINT_PATH = 'hdfs://namenode:9000/projet/streaming/_checkpoint_december'
+SILVER_TRIPS_PATH = 'hdfs://namenode:9000/projet/silver/trips_clean/'
+KAFKA_BROKER = 'kafka:29092'
+KAFKA_TOPIC = 'nyc-taxi-trips'
 
 
 def get_ch_client():
@@ -125,12 +129,64 @@ def run_batch_reprocessing(trigger_source):
         client.command('TRUNCATE TABLE reprocess_daily_stats')
         client.insert_df('reprocess_daily_stats', pdf_daily)
 
+        # Merge December results into permanent batch tables
+        merge_reprocess_into_batch()
+
+        # ── Absorb: move december data into silver (permanent batch) ──
+        print('\n--- Absorption des donnees dans Silver ---')
+        trips.write.mode('append').parquet(SILVER_TRIPS_PATH)
+        print(f'  {nb_rows} lignes ajoutees a silver/trips_clean')
+
+        # ── Stop streaming + producer ──
+        print('\n--- Reset complet du streaming ---')
+        import subprocess as _sp
+        _sp.run(['pkill', '-f', 'streaming_all.py'], capture_output=True)
+        _sp.run(['pkill', '-f', 'kafka_producer.py'], capture_output=True)
+        print('  Streaming + Producer arretes')
+        time.sleep(5)
+
+        # ── Clear HDFS: december_trips + checkpoint ──
+        hadoop_conf = spark._jsc.hadoopConfiguration()
+        fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(hadoop_conf)
+        for p in [HDFS_STREAMING_PATH, HDFS_CHECKPOINT_PATH]:
+            hdfs_path = spark._jvm.org.apache.hadoop.fs.Path(p)
+            if fs.exists(hdfs_path):
+                fs.delete(hdfs_path, True)
+                print(f'  HDFS supprime: {p}')
+
+        # ── Purge Kafka topic (delete + recreate so streaming starts clean) ──
+        try:
+            from kafka.admin import KafkaAdminClient, NewTopic
+            admin = KafkaAdminClient(bootstrap_servers=KAFKA_BROKER)
+            admin.delete_topics([KAFKA_TOPIC])
+            print(f'  Kafka topic {KAFKA_TOPIC} supprime')
+            time.sleep(3)
+            admin.create_topics([NewTopic(name=KAFKA_TOPIC, num_partitions=1, replication_factor=1)])
+            print(f'  Kafka topic {KAFKA_TOPIC} recree (vide)')
+            admin.close()
+        except Exception as kafka_err:
+            print(f'  Kafka reset: {kafka_err}')
+
+        # ── Clear streaming tables in ClickHouse (fresh start) ──
+        client.command('TRUNCATE TABLE stream_borough_stats')
+        client.command('TRUNCATE TABLE stream_top_zones')
+        client.command('TRUNCATE TABLE stream_alerts')
+        print('  Tables stream_* videes')
+
+        # ── Restart streaming ──
+        _sp.Popen(
+            [sys.executable, '/home/jovyan/work/scripts/streaming_all.py'],
+            stdout=open('/tmp/streaming_all.log', 'a'),
+            stderr=_sp.STDOUT
+        )
+        print('  Streaming relance (clean slate)')
+
         # Log du cycle
         end = datetime.datetime.now()
         duration = (end - start).total_seconds()
         log_entry = {
             'cycle_num': cycle_num,
-            'executed_at': end.strftime('%Y-%m-%d %H:%M:%S'),
+            'executed_at': end,
             'rows_processed': nb_rows,
             'duration_seconds': builtins.round(duration, 1),
             'boroughs_found': len(pdf_borough),
@@ -140,13 +196,95 @@ def run_batch_reprocessing(trigger_source):
         client.close()
 
         print(f'\nCycle {cycle_num} termine en {builtins.round(duration, 1)}s')
-        print(f'  {nb_rows} lignes traitees')
+        print(f'  {nb_rows} lignes absorbees dans batch, streaming repart de zero')
 
     except Exception as e:
+        import traceback
         print(f'Erreur batch: {e}')
+        traceback.print_exc()
+        # Write a failure entry so the dashboard shows something went wrong
+        try:
+            end = datetime.datetime.now()
+            duration = (end - start).total_seconds()
+            err_client = get_ch_client()
+            err_client.insert_df('reprocess_log', pd.DataFrame([{
+                'cycle_num': cycle_num,
+                'executed_at': end,
+                'rows_processed': -1,
+                'duration_seconds': builtins.round(duration, 1),
+                'boroughs_found': 0,
+                'zones_found': 0
+            }]))
+            err_client.close()
+        except Exception as log_err:
+            print(f'Impossible d\'ecrire le log d\'erreur: {log_err}')
     finally:
         spark.stop()
         print('SparkSession fermee (cores liberes)')
+
+
+def merge_reprocess_into_batch():
+    """Merge December reprocess results into the permanent batch tables."""
+    client = get_ch_client()
+    try:
+        df_reprocess = client.query_df('SELECT * FROM reprocess_borough_stats FINAL')
+        if df_reprocess.empty:
+            print('Pas de donnees reprocess a fusionner dans batch')
+            return
+
+        # ── borough stats: weighted merge of Jan-Nov + December ──
+        df_batch = client.query_df('SELECT * FROM batch_stats_borough FINAL')
+        merged = df_batch.merge(df_reprocess, on='borough', how='outer', suffixes=('_b', '_r'))
+        merged = merged.fillna(0)
+        merged['nb_trips'] = merged['nb_trips_b'] + merged['nb_trips_r']
+        merged['total_revenue'] = (merged['total_revenue_b'] + merged['total_revenue_r']).round(2)
+        total = merged['nb_trips'].replace(0, 1)
+        merged['avg_distance'] = ((merged['avg_distance_b'] * merged['nb_trips_b'] +
+                                   merged['avg_distance_r'] * merged['nb_trips_r']) / total).round(2)
+        merged['avg_fare'] = ((merged['avg_fare_b'] * merged['nb_trips_b'] +
+                               merged['avg_fare_r'] * merged['nb_trips_r']) / total).round(2)
+        result_borough = merged[['borough', 'nb_trips', 'avg_distance', 'avg_fare', 'total_revenue']].copy()
+        result_borough['nb_trips'] = result_borough['nb_trips'].astype('uint64')
+        # INSERT only — ReplacingMergeTree keeps latest by borough key
+        client.insert_df('batch_stats_borough', result_borough)
+        print(f'batch_stats_borough mis a jour : {len(result_borough)} boroughs (Jan-Dec)')
+
+        # ── monthly stats: upsert December row ──
+        df_daily = client.query_df('SELECT * FROM reprocess_daily_stats FINAL')
+        if not df_daily.empty:
+            dec_nb_trips = int(df_daily['nb_trips'].sum())
+            dec_revenue = round(float(df_daily['total_revenue'].sum()), 2)
+            # weighted avg_distance from borough stats
+            w = df_reprocess['nb_trips'].sum()
+            dec_avg_dist = round(
+                float((df_reprocess['avg_distance'] * df_reprocess['nb_trips']).sum() / w) if w > 0 else 0.0, 2
+            )
+            dec_row = pd.DataFrame([{
+                'month': 12, 'year': 2023,
+                'nb_trips': dec_nb_trips,
+                'total_revenue': dec_revenue,
+                'avg_distance': dec_avg_dist
+            }])
+            client.insert_df('batch_stats_monthly', dec_row)
+            print(f'batch_stats_monthly: Decembre insere ({dec_nb_trips:,} trajets)')
+
+        # ── top zones: merge counts, re-rank top 10 ──
+        df_batch_zones = client.query_df('SELECT * FROM batch_top_zones FINAL')
+        df_reprocess_zones = client.query_df('SELECT * FROM reprocess_top_zones FINAL')
+        if not df_reprocess_zones.empty:
+            combined = pd.concat([df_batch_zones, df_reprocess_zones])
+            merged_zones = (combined.groupby(['zone', 'borough'], as_index=False)['nb_trips']
+                            .sum().sort_values('nb_trips', ascending=False).head(10))
+            merged_zones['nb_trips'] = merged_zones['nb_trips'].astype('uint64')
+            client.insert_df('batch_top_zones', merged_zones)
+            print(f'batch_top_zones mis a jour : top 10 fusionnes (Jan-Dec)')
+
+    except Exception as e:
+        import traceback
+        print(f'Erreur fusion batch: {e}')
+        traceback.print_exc()
+    finally:
+        client.close()
 
 
 def check_manual_trigger():

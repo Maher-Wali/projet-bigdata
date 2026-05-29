@@ -12,14 +12,14 @@ import subprocess
 subprocess.check_call(['pip', 'install', 'kafka-python'])
 
 from kafka import KafkaProducer
-import json, time, csv, datetime
+import sys, json, time, csv, datetime
 
 KAFKA_BROKER = 'kafka:29092'
 TOPIC = 'nyc-taxi-trips'
 CSV_PATH = '/home/jovyan/data/fact_trips_sample.csv'
-BATCH_SIZE = 100       # Envoyer par rafales de 100 messages
-LOG_EVERY = 500        # Log toutes les 500 messages
-DELAY = 0.5            # 500ms de pause entre chaque rafale → ~200 msg/s
+BATCH_SIZE = 20        # Envoyer par rafales de 20 messages
+LOG_EVERY = 200        # Log toutes les 200 messages
+DELAY = 1.0            # 1s de pause entre chaque rafale → ~20 msg/s (~74 min pour tout envoyer)
 
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
@@ -32,38 +32,41 @@ print(f'Producer connecte a {KAFKA_BROKER}')
 print(f'Mode rafale : {BATCH_SIZE} messages/rafale, pause {DELAY}s entre rafales')
 
 count = 0
-skipped = 0
-with open(CSV_PATH, 'r') as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        date_id = float(row['data_id']) if row['data_id'] else None
+cycle = 0
 
-        # Seulement Decembre (date_id >= 336)
-        if date_id is None or date_id < 336:
-            skipped += 1
-            continue
+# Boucle infinie : relit le CSV quand il est fini (simule un flux continu)
+while True:
+    cycle += 1
+    print(f'\n=== Cycle {cycle} ===')
+    with open(CSV_PATH, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            date_id = float(row['data_id']) if row['data_id'] else None
 
-        message = {
-            'date_id': date_id,
-            'pickup_location_id': int(row['localizacao_partida_id']),
-            'dropoff_location_id': int(row['localizacao_chegada_id']),
-            'weather_id': float(row['clima_id']) if row['clima_id'] else None,
-            'trip_distance': float(row['distancia_viagem']),
-            'total_amount': float(row['valor_total']),
-            'event_time': datetime.datetime.now().isoformat()
-        }
-        producer.send(TOPIC, value=message)
-        count += 1
+            # Seulement Decembre (date_id >= 336)
+            if date_id is None or date_id < 336:
+                continue
 
-        if count % LOG_EVERY == 0:
-            print(f'  {count} messages envoyes...')
+            message = {
+                'date_id': date_id,
+                'pickup_location_id': int(row['localizacao_partida_id']),
+                'dropoff_location_id': int(row['localizacao_chegada_id']),
+                'weather_id': float(row['clima_id']) if row['clima_id'] else None,
+                'trip_distance': float(row['distancia_viagem']),
+                'total_amount': float(row['valor_total']),
+                'event_time': datetime.datetime.now().isoformat()
+            }
+            producer.send(TOPIC, value=message)
+            count += 1
 
-        # Pause uniquement entre les rafales (pas entre chaque message)
-        if count % BATCH_SIZE == 0:
-            producer.flush()
-            time.sleep(DELAY)
+            if count % LOG_EVERY == 0:
+                print(f'  {count} messages envoyes...')
+                sys.stdout.flush()
 
-producer.flush()
-producer.close()
-print(f'\nTermine : {count} messages de Decembre envoyes dans "{TOPIC}"')
-print(f'Lignes ignorees (mois 1-11) : {skipped}')
+            # Pause entre les rafales
+            if count % BATCH_SIZE == 0:
+                producer.flush()
+                time.sleep(DELAY)
+
+    print(f'Cycle {cycle} termine ({count} messages au total). Reboucle...')
+    sys.stdout.flush()
